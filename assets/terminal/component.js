@@ -35,8 +35,11 @@ export default {
       sid: 0,
       rows: ROWS_PLAIN,
       showKeys: false,
-      hist: [],
-      histIdx: -1,
+      hist: [],              // 全部历史命令（落盘在 /userdisk/Favorite/PenTerm/history.json）
+      favs: [],              // 常用命令（落盘 favorites.json）
+      panel: '',             // '' | 'hist' | 'fav' —— 打开的面板
+      page: 0,               // 面板当前页（0 = 最新的一页）
+      pageRows: 7,           // 面板每页显示条数
       lastCmd: '',
       showSsh: false,
       sshHost: '',
@@ -68,6 +71,7 @@ export default {
       if (!this._timer) this._timer = setInterval(() => this.tick(), 260);
       if (!this.sid) this.startLocal();
       this.subscribeInput();
+      this.storeInit();
     },
     onHide() {
       if (this._timer) { clearInterval(this._timer); this._timer = null; }
@@ -341,16 +345,101 @@ export default {
       this.send();
     },
 
+    // ---------- 历史 / 常用命令：持久化在 /userdisk/Favorite/PenTerm/ ----------
+    storeInit() {
+      if (this._storeReady) return;
+      this._storeReady = true;
+      try {
+        var raw = term.storeLoad('history');
+        if (raw) { var a = JSON.parse(raw); if (a && a.length) this.hist = a; }
+      } catch (e) { console.warn('[term-ui] 读历史失败: ' + e); }
+      try {
+        var raw2 = term.storeLoad('favorites');
+        if (raw2) { var b = JSON.parse(raw2); if (b && b.length) this.favs = b; }
+      } catch (e) { console.warn('[term-ui] 读常用失败: ' + e); }
+      var dir = '';
+      try { dir = term.storeDir(); } catch (e) {}
+      console.warn('[term-ui] 已载入 历史=' + this.hist.length + ' 常用=' + this.favs.length + ' 目录=' + dir);
+    },
+    saveHist() {
+      try { term.storeSave('history', JSON.stringify(this.hist.slice(-300))); } catch (e) {}
+    },
+    saveFavs() {
+      try { term.storeSave('favorites', JSON.stringify(this.favs)); } catch (e) {}
+    },
+
+    // ---------- 面板：历史 / 常用 ----------
+    togglePanel(p) {
+      this.panel = (this.panel === p) ? '' : p;
+      this.page = 0;
+      if (this.panel === 'fav' && !this.favs.length) this.status = '常用还是空的：输入命令后点「收藏」';
+    },
+    closePanel() { this.panel = ''; },
+    // 把列表摊平成"第 0 条 = 最新"的数组
+    panelList() {
+      var src = (this.panel === 'fav') ? (this.favs || []) : (this.hist || []);
+      var out = [];
+      for (var i = src.length - 1; i >= 0; i--) out.push({ i: i, cmd: String(src[i]) });
+      return out;
+    },
+    pageTotal() {
+      return Math.max(1, Math.ceil(this.panelList().length / this.pageRows));
+    },
+    pageItems() {
+      var all = this.panelList();
+      var start = this.page * this.pageRows;
+      return all.slice(start, start + this.pageRows);
+    },
+    pageNext() { if (this.page + 1 < this.pageTotal()) this.page++; },
+    pagePrev() { if (this.page > 0) this.page--; },
+    // 点某条 = 灌进原生键盘 → 可以改完再执行（这就是"查看并编辑全部历史"）
+    editCmd(cmd) {
+      this.input = cmd;
+      this.panel = '';
+      this.openKeyboard(cmd);
+    },
+    // ▶ = 直接重跑
+    runCmd(cmd) {
+      this.input = cmd;
+      this.panel = '';
+      this.send();
+    },
+    addFav() {
+      var c = this.input || this.lastCmd || '';
+      if (!c) { this.status = '没有可收藏的命令（先输入或跑一条）'; return; }
+      if (this.favs.indexOf(c) >= 0) { this.status = '已在常用里'; return; }
+      this.favs.push(c);
+      this.saveFavs();
+      this.status = '已收藏 ' + String(c).slice(0, 24);
+    },
+    delFav(i) {
+      this.favs.splice(i, 1);
+      this.saveFavs();
+      this.status = '已删除该常用';
+    },
+    clearHist() {
+      this.hist = [];
+      this.saveHist();
+      this.page = 0;
+      this.status = '历史已清空（文件也已更新）';
+    },
+    clearFavs() {
+      this.favs = [];
+      this.saveFavs();
+      this.page = 0;
+      this.status = '常用已清空';
+    },
+
     // ---------- 发送 ----------
     send() {
       if (!this.sid) return;
       var cmd = this.input || '';
       if (cmd) {
         var h = this.hist || (this.hist = []);
-        if (!h.length || h[h.length - 1] !== cmd) h.push(cmd);
-        if (h.length > 50) h.shift();
-        this.histIdx = -1;
+        if (!h.length || h[h.length - 1] !== cmd) { h.push(cmd); this.saveHist(); }
+        if (h.length > 300) h.shift();
         this.lastCmd = cmd;
+        this.page = 0;
       }
       term.write(this.sid, cmd + '\n');
       this.input = '';
@@ -358,19 +447,49 @@ export default {
       this.tick();
     },
 
-    // 上一条命令：取回历史并直接把内容灌进原生键盘，方便改完就执行
-    histPrev() {
-      var h = this.hist || [];
-      if (!h.length) { this.status = '还没有历史命令'; return; }
-      this.histIdx = Math.min((this.histIdx < 0 ? 0 : this.histIdx + 1), h.length - 1);
-      var cmd = h[h.length - 1 - this.histIdx];
-      this.input = cmd;
-      this.openKeyboard(cmd);
-    },
+    // 上一条命令的"快捷回填"已被「历史」面板取代（面板第 1 条就是最新一条，可编辑）
     sendKey(d) {
       if (!this.sid) return;
       term.write(this.sid, d);
+      // Up/Dn 是 shell 的历史召回：等它重画完，把"命令行里正在编辑的内容"捞进输入框
+      if (d === '\u001b[A' || d === '\u001b[B') {
+        setTimeout(() => this.pullShellLine(), 350);
+      }
       this.tick();
+    },
+
+    // 读终端光标所在行（即 shell 的命令行），去掉提示符后灌进输入框，
+    // 然后**把 shell 那一行清掉** —— 否则用户改完点「发送」时，文本会被追加到
+    // shell 已有的那行后面，变成 toptop 这种"执行两遍"的 bug。
+    pullShellLine() {
+      if (!this.sid) return;
+      try {
+        var line = term.vtCursorLine(this.sid) || '';
+        var m = line.match(/[#$>]\s+([\s\S]*)$/);
+        var cmd = (m ? m[1] : line).replace(/\s+$/, '');
+        if (cmd) {
+          this.input = cmd;
+          this.status = '已从命令行载入：' + String(cmd).slice(0, 22);
+          this.clearShellLine();
+        } else {
+          this.status = '命令行当前是空的';
+        }
+        console.warn('[term-ui] pullShellLine: ' + JSON.stringify(line) + ' → ' + JSON.stringify(cmd));
+      } catch (e) {
+        console.warn('[term-ui] 读命令行失败: ' + e);
+      }
+    },
+
+    // 清空 shell 的命令行（Ctrl-A 到行首 + Ctrl-K 删到行尾）。
+    // 全屏程序（vi/less/top）里不动它，避免误删。
+    clearShellLine() {
+      if (!this.sid) return;
+      try {
+        var info = term.vtInfo(this.sid);
+        if (info && info.alt) { console.warn('[term-ui] 全屏程序中，跳过清行'); return; }
+      } catch (e) {}
+      term.write(this.sid, '\u0001\u000b');
+      console.warn('[term-ui] 已清空 shell 命令行');
     },
     clearScreen() {
       if (this.sid) term.write(this.sid, 'clear\n');
@@ -427,6 +546,7 @@ export default {
 
     // ---- 终端画面（点一下调键盘、上下滑动翻页）----
     var imgH = (this.rows * 16) + 'px';
+    // 按需求：终端画面区**不再**呼出键盘（只能点下方输入框），这里只保留滑动翻看
     var screen = h('div', {
       staticStyle: { width: '960px', height: imgH, backgroundColor: '#0b0f14', position: 'relative' },
       on: {
@@ -434,7 +554,6 @@ export default {
         touchstart: this.onTouchStart,
         touchmove: this.onTouchMove,
         touchend: this.onTouchEnd,
-        click: () => this.openKeyboard(),
       },
     }, [
       this.frame
@@ -455,8 +574,72 @@ export default {
             },
             on: { click: () => this.toBottom() },
           }, this.hint)
-        : h('text', { staticStyle: { position: 'absolute', right: '8px', bottom: '6px', color: '#484f58', fontSize: '12px' } }, '上滑翻看 · 点屏幕输入'),
+        : h('text', { staticStyle: { position: 'absolute', right: '8px', bottom: '6px', color: '#484f58', fontSize: '12px' } }, '上滑翻看 · 点下方输入框输入'),
     ]);
+
+    // ---- 历史 / 常用 面板（占满输出区，可翻页；点条目=载入键盘编辑，▶=直接执行）----
+    var panelView = null;
+    if (this.panel) {
+      var isFav = (this.panel === 'fav');
+      var items = this.pageItems();
+      var btn = (txt, color, bg, fn, key) => h('text', {
+        key: key,
+        staticStyle: {
+          color: color, fontSize: '14px', backgroundColor: bg,
+          paddingLeft: '8px', paddingRight: '8px', paddingTop: '2px', paddingBottom: '2px',
+          borderRadius: '5px', marginRight: '8px',
+        },
+        on: { click: fn },
+      }, txt);
+
+      var rows = items.map((it, idx) => h('div', {
+        key: 'r' + idx,
+        staticStyle: { width: '960px', position: 'relative', flexDirection: 'row', height: '20px', alignItems: 'center', paddingLeft: '8px', paddingRight: '8px' },
+      }, [
+        h('text', { staticStyle: { color: '#484f58', fontSize: '12px', width: '34px' } }, '#' + (it.i + 1)),
+        h('text', {
+          staticStyle: { flex: 1, color: isFav ? '#7ee787' : '#c9d1d9', fontSize: '14px' },
+          on: { click: () => this.editCmd(it.cmd) },
+        }, String(it.cmd).slice(0, 46)),
+        h('text', {
+          staticStyle: { color: '#0b0f14', fontSize: '13px', backgroundColor: '#3fb950', paddingLeft: '7px', paddingRight: '7px', borderRadius: '5px', marginLeft: '6px' },
+          on: { click: () => this.runCmd(it.cmd) },
+        }, '▶'),
+        isFav ? h('text', {
+          staticStyle: {
+            position: 'absolute', right: '12px', top: '2px',
+            color: '#f85149', fontSize: '13px', paddingLeft: '8px', paddingRight: '8px',
+          },
+          on: { click: () => this.delFav(it.i) },
+        }, 'x') : h('text', { staticStyle: { width: '0px' } }, ''),
+      ]));
+
+      panelView = h('div', {
+        staticStyle: { width: '960px', height: imgH, backgroundColor: '#0b0f14' },
+      }, [
+        h('div', {
+          staticStyle: { flexDirection: 'row', height: '26px', alignItems: 'center', backgroundColor: '#161b22', paddingLeft: '8px', paddingRight: '8px' },
+        }, [
+          h('text', { staticStyle: { color: isFav ? '#7ee787' : '#58a6ff', fontSize: '15px', flex: 1 } },
+            (isFav ? '常用命令' : '历史命令') + '  ' + (this.page + 1) + '/' + this.pageTotal() +
+            '  共 ' + this.panelList().length + ' 条'),
+          isFav ? btn('收藏当前', '#0b0f14', '#3fb950', () => this.addFav(), 'b1') : null,
+          btn('清空', '#f85149', '#21262d', () => (isFav ? this.clearFavs() : this.clearHist()), 'b2'),
+          btn('关闭', '#c9d1d9', '#30363d', () => this.closePanel(), 'b3'),
+        ]),
+        h('div', { staticStyle: { flex: 1 } }, rows.length ? rows : [
+          h('text', { staticStyle: { color: '#484f58', fontSize: '14px', paddingLeft: '12px', paddingTop: '8px' } },
+            isFav ? '还没有常用命令：输入命令后点顶栏「收藏当前」' : '还没有历史命令'),
+        ]),
+        h('div', {
+          staticStyle: { flexDirection: 'row', height: '24px', alignItems: 'center', backgroundColor: '#0d1117', paddingLeft: '8px', paddingRight: '8px' },
+        }, [
+          btn('‹ 上页', '#c9d1d9', '#21262d', () => this.pagePrev(), 'p1'),
+          btn('下页 ›', '#c9d1d9', '#21262d', () => this.pageNext(), 'p2'),
+          h('text', { staticStyle: { color: '#484f58', fontSize: '13px' } }, '点命令=载入键盘编辑 · ▶=直接执行'),
+        ]),
+      ]);
+    }
 
     // ---- 输入行 ----
     var inputRow = h('div', {
@@ -466,22 +649,30 @@ export default {
       h('text', {
         staticStyle: { flex: 1, color: this.input ? '#e6edf3' : '#484f58', fontSize: '15px' },
         on: { click: () => this.openKeyboard() },
-      }, this.input ? this.input : (this.lastCmd ? ('点这里输入…（上一条：' + String(this.lastCmd).slice(0, 36) + '）') : '点这里调出键盘输入…')),
+      }, this.input ? this.input : (this.lastCmd ? ('点这里输入…（上一条：' + String(this.lastCmd).slice(0, 30) + '）') : '点这里调出键盘输入…')),
       h('text', {
-        staticStyle: { color: '#c9d1d9', fontSize: '15px', backgroundColor: '#30363d', paddingLeft: '10px', paddingRight: '10px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px', marginRight: '8px' },
-        on: { click: () => this.histPrev() },
-      }, '上一条'),
+        staticStyle: { color: '#d29922', fontSize: '15px', backgroundColor: '#30363d', paddingLeft: '9px', paddingRight: '9px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px', marginRight: '7px' },
+        on: { click: () => this.addFav() },
+      }, '★'),
       h('text', {
-        staticStyle: { color: '#0b0f14', fontSize: '15px', backgroundColor: '#58a6ff', paddingLeft: '10px', paddingRight: '10px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px', marginRight: '8px' },
+        staticStyle: { color: this.panel === 'hist' ? '#0b0f14' : '#c9d1d9', fontSize: '15px', backgroundColor: this.panel === 'hist' ? '#58a6ff' : '#30363d', paddingLeft: '9px', paddingRight: '9px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px', marginRight: '7px' },
+        on: { click: () => this.togglePanel('hist') },
+      }, '历史'),
+      h('text', {
+        staticStyle: { color: this.panel === 'fav' ? '#0b0f14' : '#c9d1d9', fontSize: '15px', backgroundColor: this.panel === 'fav' ? '#3fb950' : '#30363d', paddingLeft: '9px', paddingRight: '9px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px', marginRight: '7px' },
+        on: { click: () => this.togglePanel('fav') },
+      }, '常用'),
+      h('text', {
+        staticStyle: { color: '#0b0f14', fontSize: '15px', backgroundColor: '#58a6ff', paddingLeft: '9px', paddingRight: '9px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px', marginRight: '7px' },
         on: { click: () => this.openKeyboard() },
       }, '键盘'),
       h('text', {
-        staticStyle: { color: '#0b0f14', fontSize: '15px', backgroundColor: '#3fb950', paddingLeft: '10px', paddingRight: '10px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px' },
+        staticStyle: { color: '#0b0f14', fontSize: '15px', backgroundColor: '#3fb950', paddingLeft: '9px', paddingRight: '9px', paddingTop: '3px', paddingBottom: '3px', borderRadius: '6px' },
         on: { click: () => this.send() },
       }, '发送'),
     ]);
 
-    var children = [bar, screen, inputRow];
+    var children = [bar, panelView || screen, inputRow];
 
     // ---- 快捷键条（默认折叠，避免挤占输出区）----
     if (this.showKeys) {

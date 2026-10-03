@@ -255,15 +255,21 @@ CDN 会截断长连接）、`hosts_tool.ps1`（hosts 劫持，需要点 UAC）�
 | 下载固件 `HTTP 403` | 加浏览器 User-Agent；大文件分块下（CDN 会截断） |
 | 上传后文件 md5 不一致/尾部缺字节 | multipart 解析要"找到分隔符时先把之前的数据落盘"（见 fileserver 插件注释） |
 | 插件线程把笔 CPU 打满、ADB 掉线 | multipart/循环逻辑出现"缓冲满又不推进"的空转 → 保证每次循环都有进展 |
+| **侧载应用重启后消失，且应用数据（登录态/下载/草稿）一起丢** | **不是 APP_UPD 干的**（它只是订阅 PMS 事件做记录）。真凶是**桌面里的 `AppWhitelistCleaner`**：开机拉云端白名单 `api-overmind.youdao.com/.../appWhitelist`（116 个 appid），**不在名单里的应用直接 `pm.removePackage`**；应用数据就存在 `<包>/data/`，所以连数据一起没。判定依据是"是否在白名单"，`flag: 16384` 只是日志信息。**线上配置 = DNS 劫持 + keeper 自愈自退出**（`scripts\dns-blackhole.sh` 让 cleaner 跳过；`scripts\sideload-keeper.sh` 盯日志判定：确认跳过就做完镜像→交给 cron→自行退出，出现 `removing:` 才修复并常驻）。实测 `removing:` 从每次 3~4 降到 **0**。详见 `reference/09-appupd-and-whitelist-cleaner.md` |
+| **要改笔的 DNS / 屏蔽某个域名** | `/etc/resolv.conf` 是软链到 `/tmp`（dhcpcd 会重写）；**`/etc/hosts` 虽是只读 erofs 上的文件，但 `mount --bind` 可覆盖** → 用 `scripts\dns-blackhole.sh`（自定义 hosts 放 `/userdisk`，开机钩子重挂，可逆） |
+| **插上电脑没有 MTP / 不能传文件** | 笔原生支持 MTP（`usb_f_mtp.ko` + `mtp-server`）。**开过 ADB 调试后系统把 `/tmp/.usb_config` 从 `usb_mtp_en` 覆盖成 `usb_adb_en`**（原厂 `/etc/init.d/.usb_config` 是 MTP）→ USB 只暴露 ADB。用 `scripts\usb-mode.sh both` 同时开 ADB+MTP，`persist both` 让它每次开机自动生效。详见 `reference/10-usb-modes-and-mtp.md` |
+| 动了 USB 配置后 adb 掉线 / Windows 完全看不到设备 | `S98usbdevice stop` 会 `kill adbd` 且把 `UDC` 置 none → **先确保有 TCP adb 或 SSH 通道**再操作；`start` 完成后约 10~20s 自动恢复 |
+| `pm name=<名字> type=removed` 但包还在 | 只是注册表条目丢了 → 重新 `miniapp_cli install` 即恢复 `type=installed`（`scripts\pen_registry.py check/fix` 可巡检） |
+| `pkill -f skip_login.sh` 之后 ADB 掉线/offline | 脚本名匹配到了 `sh` 自己的命令行，把调用方一起杀了 → 用 pid 文件停（`kill $(cat /tmp/sideload-keeper.pid)`） |
 
 ## 9. 本 skill 的文件
 
 | 路径 | 说明 |
 |---|---|
-| `scripts\` | 全套工具（自包含副本）：`ydpen.py`、`install_fs_plugin.py`、`fileserver_plugin.py`、`pack_upload_amr.py`、`patch_firmware.py`、`ota_meta.py`、`fake_ota_server.py`、`fast_download.py`、`hosts_tool.ps1`、`lan_scan_adb.py`、`tap`/`tap.c`、**`touchinfo`/`touchinfo.c`（X7 触控，逻辑坐标换算）**、**`ota_fetch.py`**、**`ota_direct_probe.py`**、**`patch_policy.py`**、`fssrv`、`dltest.c`、`test_upload.py` |
+| `scripts\` | 全套工具（自包含副本）：`ydpen.py`、`install_fs_plugin.py`、`fileserver_plugin.py`、`pack_upload_amr.py`、`patch_firmware.py`、`ota_meta.py`、`fake_ota_server.py`、`fast_download.py`、`hosts_tool.ps1`、`lan_scan_adb.py`、`tap`/`tap.c`、**`touchinfo`/`touchinfo.c`（X7 触控，逻辑坐标换算）**、**`ota_fetch.py`**、**`ota_direct_probe.py`**、**`patch_policy.py`**、**`dns-blackhole.sh`（bind mount 覆盖 /etc/hosts 劫持域名）**、**`usb-mode.sh`（切 USB 模式：MTP/ADB/两者，可持久化）**、**`build_terminal.py`（PenTerm 一键构建：插件+页面+打包+安装）**、**`sideload-keeper.sh`（保活+数据镜像，确认 cleaner 跳过后自行退出）**、**`deploy_keeper.py`**、**`keeper_selftest.py`（离线验证数据恢复）**、**`keeper_decision_test.py`（离线验证"跳过→退出 / 清理→常驻"两分支）**、**`pen_registry.py`（注册表巡检/修复）**、**`jsfmc`/`jsfmc.c`（笔上 JS→.js.bin）**、**`pack_amr.py`**、**`mkfont.py`/`mkcjk.py`/`mkicon.py`**、**逆向四件套：`elf_strings.py`/`elf_syms.py`/`elf_range.py`/`jsbin_atoms.py`**、**`probe_ports.py`**、`fssrv`、`dltest.c`、`test_upload.py` |
 | `assets\plugins\` | `fs_plugin.c`、`fileserver_plugin.c` 及编译好的 `.so` |
 | `assets\quickjs\` | QuickJS 2020-07-05 头文件（重编插件必需） |
-| `reference\` | 分主题深挖：接入/ADB、miniapp/amr、jsapi 插件、OTA 固件、排错、**06-YDPX7-1(X7 Pro) 接入** |
+| `reference\` | 分主题深挖：接入/ADB、miniapp/amr、jsapi 插件、OTA 固件、排错、**06-YDPX7-1(X7 Pro) 接入**、**07-miniapp 自研工具链与入口契约**、**08-侧载应用与数据持久化**、**09-APP_UPD 与 AppWhitelistCleaner 真实机制（逆向）**、**10-USB 模式与 MTP（为什么插电脑不能传文件）**、**11-PenTerm 命令历史/常用命令（含构建三坑）** |
 | `reference\workspace-docs\` | 工作区原始文档备份（README、MINIAPPS、战果与使用说明、文件互传修复说明、全新设备安装指南） |
 
 ## 10. 给未来的一句话总结

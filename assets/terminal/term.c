@@ -804,6 +804,176 @@ static JSValue js_vt_info(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     JS_SetPropertyStr(ctx, o, "alt", JS_NewInt32(ctx, s->vt->use_alt));
     return o;
 }
+/* term.vtCursorLine(sid) → 光标所在那一行的可见文本（UTF-8，去尾部空格）
+ * 用途：在 shell 里按 Up/Dn 召回历史后，把"命令行里正在编辑的内容"捞出来灌进页面输入框。 */
+static JSValue js_vt_cursor_line(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv)
+{
+    session_t *s;
+    vt_t *v;
+    char buf[1024];
+    int n = 0, last = -1, x;
+    (void)t;
+    if (argc < 1) return JS_NewString(ctx, "");
+    s = find_sid(get_int(ctx, argv[0]));
+    if (!s || !s->vt) return JS_NewString(ctx, "");
+    v = s->vt;
+    if (v->cy < 0 || v->cy >= v->rows) return JS_NewString(ctx, "");
+    {
+        vt_cell_t *row = &v->cells[(size_t)v->cy * (size_t)v->cols];
+        for (x = 0; x < v->cols; x++) {
+            if (row[x].cp != ' ' && row[x].cp != 0) last = x;
+        }
+        for (x = 0; x <= last && n < (int)sizeof(buf) - 6; x++) {
+            unsigned int cp = row[x].cp;
+            if (cp == 0) continue;                  /* 宽字符右半格 */
+            if (cp < 0x80) buf[n++] = (char)cp;
+            else if (cp < 0x800) {
+                buf[n++] = (char)(0xC0 | (cp >> 6));
+                buf[n++] = (char)(0x80 | (cp & 0x3F));
+            } else {
+                buf[n++] = (char)(0xE0 | (cp >> 12));
+                buf[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                buf[n++] = (char)(0x80 | (cp & 0x3F));
+            }
+        }
+    }
+    buf[n] = '\0';
+    return JS_NewString(ctx, buf);
+}
+
+/* ---------------------------------------------------------------- 数据存储
+ * 页面要「查看/编辑全部历史命令」和「常用命令」→ 需要持久化。
+ * 存放位置按需求放在 U 盘可见目录：
+ *     /userdisk/Favorite/PenTerm/history.json     命令历史
+ *     /userdisk/Favorite/PenTerm/favorites.json   常用命令
+ * 这样插电脑（MTP）或用文件管理器都能看到、能备份/编辑。
+ * 写盘用「临时文件 + rename」，避免掉电写出半截 JSON。
+ */
+#define TERM_STORE_DIR "/userdisk/Favorite/PenTerm"
+
+/* 确保目录存在，成功时把路径写进 out */
+static int store_ensure(char *out, size_t cap)
+{
+    struct stat st;
+    if (stat("/userdisk/Favorite", &st) != 0) return 0;
+    if (stat(TERM_STORE_DIR, &st) != 0) {
+        if (mkdir(TERM_STORE_DIR, 0777) != 0 && errno != EEXIST) return 0;
+    }
+    snprintf(out, cap, "%s", TERM_STORE_DIR);
+    return 1;
+}
+
+/* 文件名白名单（只允许字母数字下划线横线），防路径穿越 */
+static int store_name_ok(const char *n)
+{
+    const char *p;
+    if (!n || !*n || strlen(n) >= 64) return 0;
+    for (p = n; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-')) return 0;
+    }
+    return 1;
+}
+
+/* 读整个文件；返回 malloc 的字符串（调用者 free），失败返回 NULL */
+static char *read_file_all(const char *path, size_t *lenp)
+{
+    FILE *f = fopen(path, "rb");
+    char *buf;
+    long n;
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    n = ftell(f);
+    if (n < 0) { fclose(f); return NULL; }
+    if (n > 4 * 1024 * 1024) n = 4 * 1024 * 1024;      /* 兜底上限 */
+    rewind(f);
+    buf = (char *)malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return NULL; }
+    if (n > 0 && fread(buf, 1, (size_t)n, f) != (size_t)n) { /* 短读也接受 */ }
+    buf[n] = '\0';
+    fclose(f);
+    if (lenp) *lenp = (size_t)n;
+    return buf;
+}
+
+/* term.storeDir() → 目录路径（顺带创建） */
+static JSValue js_store_dir(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv)
+{
+    char dir[256];
+    (void)t; (void)argc; (void)argv;
+    if (!store_ensure(dir, sizeof(dir))) return JS_NewString(ctx, "");
+    return JS_NewString(ctx, dir);
+}
+
+/* term.storeLoad(name) → 文件内容（不存在返回空串） */
+static JSValue js_store_load(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv)
+{
+    const char *name;
+    char dir[256], path[340];
+    char *data;
+    JSValue ret;
+    (void)t;
+    if (argc < 1) return JS_NewString(ctx, "");
+    name = JS_ToCString(ctx, argv[0]);
+    if (!store_name_ok(name) || !store_ensure(dir, sizeof(dir))) {
+        JS_FreeCString(ctx, name);
+        return JS_NewString(ctx, "");
+    }
+    snprintf(path, sizeof(path), "%s/%s.json", dir, name);
+    JS_FreeCString(ctx, name);
+    data = read_file_all(path, NULL);
+    if (!data) return JS_NewString(ctx, "");
+    ret = JS_NewString(ctx, data);
+    free(data);
+    return ret;
+}
+
+/* term.storeSave(name, text) → 写入字节数（失败 -1） */
+static JSValue js_store_save(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv)
+{
+    const char *name, *text;
+    char dir[256], path[340], tmp[360];
+    FILE *f;
+    size_t len;
+    int ok;
+    (void)t;
+    if (argc < 2) return JS_NewInt32(ctx, -1);
+    name = JS_ToCString(ctx, argv[0]);
+    text = JS_ToCString(ctx, argv[1]);
+    if (!store_name_ok(name) || !text || !store_ensure(dir, sizeof(dir))) {
+        JS_FreeCString(ctx, name);
+        if (text) JS_FreeCString(ctx, text);
+        return JS_NewInt32(ctx, -1);
+    }
+    snprintf(path, sizeof(path), "%s/%s.json", dir, name);
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    len = strlen(text);
+    f = fopen(tmp, "wb");
+    ok = (f && fwrite(text, 1, len, f) == len);
+    if (f) fclose(f);
+    if (ok) ok = (rename(tmp, path) == 0);
+    if (!ok) unlink(tmp);
+    JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, text);
+    return JS_NewInt32(ctx, ok ? (int)len : -1);
+}
+
+/* term.storeList() → 目录里有哪些 json（调试/自检用） */
+static JSValue js_store_list(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv)
+{
+    char dir[256], cmd[420], buf[2048];
+    FILE *p;
+    size_t n = 0;
+    (void)t; (void)argc; (void)argv;
+    if (!store_ensure(dir, sizeof(dir))) return JS_NewString(ctx, "");
+    snprintf(cmd, sizeof(cmd), "ls -l '%s' 2>/dev/null", dir);
+    p = popen(cmd, "r");
+    if (!p) return JS_NewString(ctx, "");
+    while (n + 1 < sizeof(buf) && fgets(buf + n, (int)(sizeof(buf) - n), p)) n = strlen(buf);
+    pclose(p);
+    return JS_NewString(ctx, buf);
+}
+
 /* ------------------------------------------------------------------ 模块注册 */
 
 static int term_module_init(JSContext *ctx, JSModuleDef *m)
@@ -832,6 +1002,12 @@ static int term_module_init(JSContext *ctx, JSModuleDef *m)
     JS_SetPropertyStr(ctx, obj, "vtScroll", JS_NewCFunction(ctx, js_vt_scroll, "vtScroll", 2));
     JS_SetPropertyStr(ctx, obj, "vtHistory", JS_NewCFunction(ctx, js_vt_history, "vtHistory", 1));
     JS_SetPropertyStr(ctx, obj, "vtInfo", JS_NewCFunction(ctx, js_vt_info, "vtInfo", 1));
+    JS_SetPropertyStr(ctx, obj, "vtCursorLine", JS_NewCFunction(ctx, js_vt_cursor_line, "vtCursorLine", 1));
+    /* 历史/常用命令的持久化（/userdisk/Favorite/PenTerm/） */
+    JS_SetPropertyStr(ctx, obj, "storeDir", JS_NewCFunction(ctx, js_store_dir, "storeDir", 0));
+    JS_SetPropertyStr(ctx, obj, "storeLoad", JS_NewCFunction(ctx, js_store_load, "storeLoad", 1));
+    JS_SetPropertyStr(ctx, obj, "storeSave", JS_NewCFunction(ctx, js_store_save, "storeSave", 2));
+    JS_SetPropertyStr(ctx, obj, "storeList", JS_NewCFunction(ctx, js_store_list, "storeList", 0));
 
     JS_SetModuleExport(ctx, m, "default", JS_DupValue(ctx, obj));
     JS_SetModuleExport(ctx, m, "Term", JS_DupValue(ctx, obj));

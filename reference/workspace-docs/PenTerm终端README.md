@@ -10,9 +10,45 @@
 │  770   735 root  S  760m  76.0  1  0.0 /usr/bin/...            │  ← 真 top 输出，列完美对齐
 │ 1457  1070 root  S  152m  15.2  2  0.0 /usr/bin/bt-manager 1   │
 │ /userdisk # ▏                                                  │  ← 提示符 + 光标块
-├ > [输入框]                                            发送      ┤
+├ > [输入框]                     ★ 历史 常用 键盘 发送             ┤
 ├ Enter Tab ^C Up Dn Lf Rt ^D ^Z Esc PgUp PgDn                   ┤
 ```
+
+## 命令历史 / 常用命令（9.3.1 起）
+
+底部四个入口：**★ 收藏 · 历史 · 常用 · 键盘 · 发送**
+
+| 面板 | 能力 |
+|---|---|
+| **历史** | 列出**全部**历史命令（最新在前、7 条/页翻页）。**点命令 → 灌进原生键盘**（可改完再执行）；**点 ▶ → 直接重跑**；「清空」清空历史 |
+| **常用** | 收藏的常用命令；点命令=载入键盘，▶=执行，**x=删除**（钉在行最右侧，与 ▶ 隔开整行，防误触）；「收藏当前」把当前输入/上一条加进来 |
+
+另外两条交互约定（9.3.3 起）：
+
+- **点终端画面不再呼出键盘** —— 画面区只负责上下滑动翻看；要输入请点**下方输入框**。
+- **点快捷键条的 Up / Dn 后，会把 shell 命令行里正在编辑的内容（去掉提示符）灌进输入框** ——
+  点 Up 召回上一条后可以直接接着改。实现：插件 `term.vtCursorLine(sid)` 返回光标行文本，
+  页面用 `/[#$>]\s+([\s\S]*)$/` 切掉提示符（日志：`pullShellLine: "/userdisk # ls -la …" → "ls -la …"`），然后**立刻用 Ctrl-A + Ctrl-K 把 shell 那一行清空** —— 否则按 Up 后 shell 行里已有同一条命令，点「发送」会被追加成 `toptop`（命令执行两遍）。全屏程序（vi/less）里跳过清行。
+
+数据落在 **Favorite 下的新目录**（插电脑 MTP 就能看到、能备份）：
+
+```
+/userdisk/Favorite/PenTerm/history.json     命令历史（最多 300 条）
+/userdisk/Favorite/PenTerm/favorites.json   常用命令
+```
+
+两者都是纯 JSON 数组，例如 `["df -h","top -b -n1 | head -12"]`。
+写盘用「临时文件 + rename」，掉电不会写坏；写历史/收藏走插件新增的
+`term.storeDir/storeLoad/storeSave` 三个 API（目录自动创建）。
+
+### 一键构建
+
+```powershell
+python tools\build_terminal.py --version 9.4.0 --install
+```
+
+编译插件 → 笔上编译页面（jsfmc）→ 打包 → 安装 + 同步 keeper 保活包。
+（注意 jsfmc 需要 `LD_LIBRARY_PATH=/oem/YoudaoDictPen/output/libs:...`，脚本已内置。）
 
 ## 为什么终端画面不走框架文字渲染
 
