@@ -142,7 +142,7 @@ python tools\pack_amr.py --src miniapps\terminal\build --out miniapps\dist\termi
 - **快速键**：Enter/Tab/^C/方向键/^D/^Z/Esc/PgUp/PgDn（写终端控制字符）。
 - **自检**：右上角按钮，跑 `id` + `uname -a` + `top`，用来验证画面链路与对齐。
 - **SSH**：点「SSH」填主机/用户/端口/密码（或密钥路径，如 `/userdisk/ssh/id_ed25519`）→ 连接。
-- **从电脑 ssh 进笔**：点「起sshd」（默认 :2222）。
+- **从电脑 ssh 进笔**：点「起sshd」（默认 :2222），电脑上 `ssh -p 2222 root@<笔IP>`，口令 **ydpen2026**。`sshdStart` 会自动把 `/etc/shadow` 用 bind mount 盖成"root 口令已知"的副本（原厂口令未知，不改就没法用密码登录；重启自动还原、`sshdStop` 也会还原）。要免密就把电脑公钥写进 `/userdisk/ssh/authorized_keys`。
   ```powershell
   & $adb shell "ssh-keygen -q -t ed25519 -N '' -f /userdisk/ssh/id_pc"
   & $adb pull /userdisk/ssh/id_pc out\id_pc

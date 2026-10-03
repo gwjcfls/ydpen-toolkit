@@ -269,7 +269,7 @@ CDN 会截断长连接）、`hosts_tool.ps1`（hosts 劫持，需要点 UAC）�
 | `scripts\` | 全套工具（自包含副本）：`ydpen.py`、`install_fs_plugin.py`、`fileserver_plugin.py`、`pack_upload_amr.py`、`patch_firmware.py`、`ota_meta.py`、`fake_ota_server.py`、`fast_download.py`、`hosts_tool.ps1`、`lan_scan_adb.py`、`tap`/`tap.c`、**`touchinfo`/`touchinfo.c`（X7 触控，逻辑坐标换算）**、**`ota_fetch.py`**、**`ota_direct_probe.py`**、**`patch_policy.py`**、**`dns-blackhole.sh`（bind mount 覆盖 /etc/hosts 劫持域名）**、**`usb-mode.sh`（切 USB 模式：MTP/ADB/两者，可持久化）**、**`build_terminal.py`（PenTerm 一键构建：插件+页面+打包+安装）**、**`sideload-keeper.sh`（保活+数据镜像，确认 cleaner 跳过后自行退出）**、**`deploy_keeper.py`**、**`keeper_selftest.py`（离线验证数据恢复）**、**`keeper_decision_test.py`（离线验证"跳过→退出 / 清理→常驻"两分支）**、**`pen_registry.py`（注册表巡检/修复）**、**`jsfmc`/`jsfmc.c`（笔上 JS→.js.bin）**、**`pack_amr.py`**、**`mkfont.py`/`mkcjk.py`/`mkicon.py`**、**逆向四件套：`elf_strings.py`/`elf_syms.py`/`elf_range.py`/`jsbin_atoms.py`**、**`probe_ports.py`**、`fssrv`、`dltest.c`、`test_upload.py` |
 | `assets\plugins\` | `fs_plugin.c`、`fileserver_plugin.c` 及编译好的 `.so` |
 | `assets\quickjs\` | QuickJS 2020-07-05 头文件（重编插件必需） |
-| `reference\` | 分主题深挖：接入/ADB、miniapp/amr、jsapi 插件、OTA 固件、排错、**06-YDPX7-1(X7 Pro) 接入**、**07-miniapp 自研工具链与入口契约**、**08-侧载应用与数据持久化**、**09-APP_UPD 与 AppWhitelistCleaner 真实机制（逆向）**、**10-USB 模式与 MTP（为什么插电脑不能传文件）**、**11-PenTerm 命令历史/常用命令（含构建三坑）** |
+| `reference\` | 分主题深挖：接入/ADB、miniapp/amr、jsapi 插件、OTA 固件、排错、**06-YDPX7-1(X7 Pro) 接入**、**07-miniapp 自研工具链与入口契约**、**08-侧载应用与数据持久化**、**09-APP_UPD 与 AppWhitelistCleaner 真实机制（逆向）**、**10-USB 模式与 MTP（为什么插电脑不能传文件）**、**11-PenTerm 命令历史/常用命令（含构建三坑）**、**12-笔上 sshd 密码登录（bind mount 覆盖 /etc/shadow）** |
 | `reference\workspace-docs\` | 工作区原始文档备份（README、MINIAPPS、战果与使用说明、文件互传修复说明、全新设备安装指南） |
 
 ## 10. 给未来的一句话总结

@@ -36,7 +36,7 @@ PTY 输出 ──► VT/ANSI 解析 ──► cols×rows 字符网格 ──► 
 |---|---|
 | 本地 shell | `forkpty()` + `/bin/sh -i`，真 PTY，`top`/`vi`/`less` 都能跑 |
 | SSH 客户端 | `/bin/ssh -tt`，可自动填密码（从 PTY 输出里匹配 password 提示） |
-| 一键 sshd | `term.sshdStart(port)` 在笔上拉起 OpenSSH，电脑可 `ssh root@笔IP -p 2222` |
+| 一键 sshd | `term.sshdStart(port)` 在笔上拉起 OpenSSH，电脑可 `ssh root@笔IP -p 2222`（口令 **ydpen2026**；也可把电脑公钥放进 `/userdisk/ssh/authorized_keys` 免密） |
 | 中文渲染 | 16×16 CJK 点阵（见截图 02），标点/全角都对 |
 | 滚动回看 | 画面区上下滑动翻看历史行，有新输出自动回底 |
 | **命令历史** | 「历史」面板列出**全部**历史（分页），**点命令→载入键盘编辑**，**▶→直接执行** |
